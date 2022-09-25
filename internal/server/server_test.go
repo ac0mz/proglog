@@ -41,7 +41,9 @@ func setupTest(t *testing.T, fn func(*Config)) (cli api.LogClient, cfg *Config, 
 
 	// クライアントのTLS認証情報に、クライアントのRoot CA(サーバ確認用)として独自のCAを使うよう設定
 	cliTLSConfig, err := config.SetupTLSConfig(config.TLSConfig{
-		CAFile: config.CAFile,
+		CertFile: config.ClientCertFile,
+		KeyFile:  config.ClientKeyFile,
+		CAFile:   config.CAFile,
 	})
 	cliCreds := credentials.NewTLS(cliTLSConfig)
 	// サーバを呼び出すクライアントの作成
@@ -72,6 +74,7 @@ func setupTest(t *testing.T, fn func(*Config)) (cli api.LogClient, cfg *Config, 
 		KeyFile:       config.ServerKeyFile,
 		CAFile:        config.CAFile,
 		ServerAddress: l.Addr().String(),
+		Server:        true,
 	})
 	require.NoError(t, err)
 	srvCreds := credentials.NewTLS(srvTLSConfig)
