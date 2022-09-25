@@ -1,3 +1,19 @@
+.PHONY: init gencert compile test test-clean help
+CONFIG_PATH=${HOME}/.proglog/
+
+init: ## 生成された証明書の格納場所を作成する
+	mkdir -p ${CONFIG_PATH}
+
+gencert: ## cfsslによりCAとサーバの証明書および秘密鍵を生成する
+	cfssl gencert -initca test/ca-csr.json | cfssljson -bare ca
+	cfssl gencert \
+		-ca=ca.pem \
+		-ca-key=ca-key.pem \
+		-config=test/ca-config.json \
+		-profile=server \
+		test/server-csr.json | cfssljson -bare server
+	mv *.pem *.csr ${CONFIG_PATH}
+
 compile: ## protobufをコンパイルする
 	protoc api/v1/*.proto \
       --go_out=. \
