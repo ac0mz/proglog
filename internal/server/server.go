@@ -5,17 +5,35 @@ import (
 	"time"
 
 	api "github.com/ac0mz/proglog/api/v1"
+	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
+	grpc_auth "github.com/grpc-ecosystem/go-grpc-middleware/auth"
+
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
 
 type Config struct {
-	CommitLog CommitLog
+	CommitLog  CommitLog
+	Authorizer Authorizer
 }
 
 type CommitLog interface {
 	Append(*api.Record) (uint64, error)
 	Read(uint64) (*api.Record, error)
 }
+
+type Authorizer interface {
+	Authorize(subject, object, action string) error
+}
+
+const (
+	objectWildcard = "*"
+	produceAction  = "produce"
+	consumeAction  = "consume"
+)
 
 var _ api.LogServer = (*grpcServer)(nil)
 
@@ -25,6 +43,19 @@ type grpcServer struct {
 }
 
 func NewGRPCServer(config *Config, grpcOpts ...grpc.ServerOption) (*grpc.Server, error) {
+	// サーバが各RPCのサブジェクトを識別して認可処理を開始できるようミドルウェアを設定
+	grpcOpts = append(grpcOpts,
+		grpc.StreamInterceptor(
+			grpc_middleware.ChainStreamServer(
+				grpc_auth.StreamServerInterceptor(authenticate),
+			),
+		),
+		grpc.UnaryInterceptor(
+			grpc_middleware.ChainUnaryServer(
+				grpc_auth.UnaryServerInterceptor(authenticate),
+			),
+		))
+
 	gsrv := grpc.NewServer(grpcOpts...)
 	srv, err := newgrpcServer(config)
 	if err != nil {
@@ -45,6 +76,15 @@ func newgrpcServer(config *Config) (srv *grpcServer, err error) {
 func (s *grpcServer) Produce(ctx context.Context, req *api.ProduceRequest) (
 	*api.ProduceResponse, error) {
 
+	// 書き込みの認可
+	if err := s.Authorizer.Authorize(
+		subject(ctx),
+		objectWildcard,
+		produceAction,
+	); err != nil {
+		return nil, err
+	}
+
 	offset, err := s.CommitLog.Append(req.Record)
 	if err != nil {
 		return nil, err
@@ -55,6 +95,15 @@ func (s *grpcServer) Produce(ctx context.Context, req *api.ProduceRequest) (
 // Consume はクライアントがサーバからログを読み出すリクエストを処理する。
 func (s *grpcServer) Consume(ctx context.Context, req *api.ConsumeRequest) (
 	*api.ConsumeResponse, error) {
+
+	// 読み出しの認可
+	if err := s.Authorizer.Authorize(
+		subject(ctx),
+		objectWildcard,
+		consumeAction,
+	); err != nil {
+		return nil, err
+	}
 
 	record, err := s.CommitLog.Read(req.Offset)
 	if err != nil {
@@ -110,3 +159,27 @@ func (s *grpcServer) ConsumeStream(req *api.ConsumeRequest,
 		}
 	}
 }
+
+// authenticate はクライアント証明書からサブジェクトを読み取り、RPCのコンテキストに書き込むミドルウェア。
+// ミドルウェア(別名インタセプタ)により、各RPC呼び出しの実行を途中で変更する。
+func authenticate(ctx context.Context) (context.Context, error) {
+	peer, ok := peer.FromContext(ctx)
+	if !ok {
+		return ctx, status.New(codes.Unknown, "couldn't find peer info").Err()
+	}
+	if peer.AuthInfo == nil {
+		return context.WithValue(ctx, subjectContextKey{}, ""), nil
+	}
+
+	tlsInfo := peer.AuthInfo.(credentials.TLSInfo)
+	subject := tlsInfo.State.VerifiedChains[0][0].Subject.CommonName
+	ctx = context.WithValue(ctx, subjectContextKey{}, subject)
+	return ctx, nil
+}
+
+// subject はクライアント証明書のサブジェクトを返却する。
+func subject(ctx context.Context) string {
+	return ctx.Value(subjectContextKey{}).(string)
+}
+
+type subjectContextKey struct{}
