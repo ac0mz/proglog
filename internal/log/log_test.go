@@ -3,7 +3,6 @@ package log
 import (
 	"io"
 	"os"
-	"strings"
 	"testing"
 
 	api "github.com/ac0mz/proglog/api/v1"
@@ -54,8 +53,8 @@ func testAppendRead(t *testing.T, log *Log) {
 func testOutOfRangeErr(t *testing.T, log *Log) {
 	read, err := log.Read(1)
 	require.Nil(t, read)
-	require.Error(t, err)
-	require.True(t, strings.Contains(err.Error(), "offset out of range:"))
+	apiErr := err.(api.ErrOffsetOutOfRange)
+	require.Equal(t, uint64(1), apiErr.Offset)
 	require.NoError(t, log.Close())
 }
 
