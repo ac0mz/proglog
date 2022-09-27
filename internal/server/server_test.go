@@ -2,20 +2,40 @@ package server
 
 import (
 	"context"
+	"flag"
 	"net"
 	"os"
 	"testing"
+	"time"
 
 	api "github.com/ac0mz/proglog/api/v1"
 	"github.com/ac0mz/proglog/internal/auth"
 	"github.com/ac0mz/proglog/internal/config"
 	"github.com/ac0mz/proglog/internal/log"
 	"github.com/stretchr/testify/require"
+	"go.opencensus.io/examples/exporter"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 )
+
+var debug = flag.Bool("debug", false, "Enable observability for debugging.")
+
+// TestMain は当該テストケース全体に関する設定、およびテスト実行のエントリーポイント。ロガーを置き換えて実行する。
+func TestMain(m *testing.M) {
+	// テストにおけるフラグ解析はinit関数で実行するとエラーとなるため、TestMainで実行する必要がある
+	flag.Parse()
+	if *debug {
+		logger, err := zap.NewDevelopment()
+		if err != nil {
+			panic(err)
+		}
+		zap.ReplaceGlobals(logger)
+	}
+	os.Exit(m.Run())
+}
 
 // TestServer はテストケース一覧を定義し、各テストケースを実行する。
 func TestServer(t *testing.T) {
@@ -74,6 +94,26 @@ func setupTest(t *testing.T, fn func(*Config)) (
 	require.NoError(t, err)
 
 	authorizer := auth.New(config.ACLModelFile, config.ACLPolicyFile)
+	var telemetryExporter *exporter.LogExporter
+	if *debug {
+		// 2つのファイル(テストケース毎に個別で作成される)に書き込むテレメトリエクスポータの設定と起動を実行
+		metricsLogFile, err := os.CreateTemp("", "metrics-*.log")
+		require.NoError(t, err)
+		t.Logf("metrics log file: %s", metricsLogFile.Name())
+
+		tracesLogFile, err := os.CreateTemp("", "traces-*.log")
+		require.NoError(t, err)
+		t.Logf("traces log file: %s", tracesLogFile.Name())
+
+		telemetryExporter, err = exporter.NewLogExporter(exporter.Options{
+			MetricsLogFile:    metricsLogFile.Name(),
+			TracesLogFile:     tracesLogFile.Name(),
+			ReportingInterval: time.Second,
+		})
+		require.NoError(t, err)
+		err = telemetryExporter.Start()
+		require.NoError(t, err)
+	}
 	cfg = &Config{
 		CommitLog:  clog,
 		Authorizer: authorizer,
@@ -107,7 +147,11 @@ func setupTest(t *testing.T, fn func(*Config)) (
 		nobodyConn.Close()
 		server.Stop()
 		l.Close()
-		clog.Remove()
+		if telemetryExporter != nil {
+			time.Sleep(1500 * time.Millisecond) // ストレージにログデータをフラッシュするまでに十分な時間で待機
+			telemetryExporter.Stop()
+			telemetryExporter.Close()
+		}
 	}
 }
 
