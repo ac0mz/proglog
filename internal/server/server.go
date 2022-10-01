@@ -7,6 +7,13 @@ import (
 	api "github.com/ac0mz/proglog/api/v1"
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	grpc_auth "github.com/grpc-ecosystem/go-grpc-middleware/auth"
+	grpc_zap "github.com/grpc-ecosystem/go-grpc-middleware/logging/zap"
+	grpc_ctxtags "github.com/grpc-ecosystem/go-grpc-middleware/tags"
+	"go.opencensus.io/plugin/ocgrpc"
+	"go.opencensus.io/stats/view"
+	"go.opencensus.io/trace"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -43,18 +50,48 @@ type grpcServer struct {
 }
 
 func NewGRPCServer(config *Config, grpcOpts ...grpc.ServerOption) (*grpc.Server, error) {
+	// Zapによるロギングの設定
+	logger := zap.L().Named("server") // 他ログとサーバのログを区別
+	zapOpts := []grpc_zap.Option{
+		grpc_zap.WithDurationField(func(duration time.Duration) zapcore.Field {
+			return zap.Int64("grpc.time_ns", duration.Nanoseconds()) // 各リクエストの持続時間をナノ秒単位で記録
+		}),
+	}
+	// OpenCensusによるメトリクスとトレースの設定
+	trace.ApplyConfig(trace.Config{DefaultSampler: trace.AlwaysSample()}) // 全リクエストにおけるトレースを常にサンプリング
+	// NOTE:
+	//  本番環境においてはパフォーマンスへの悪影響や機密データの追跡を避けるために、すべてのリクエストを追跡することは避けたい。
+	//  この対策として、ProbabilitySamplerメソッドで生成したサンプラーを指定することで、一部のリクエストのみサンプリングできる。
+	//  上記かつ、重要なリクエストを常にトレースしたい場合は独自のサンプラーを定義することも可能。
+	err := view.Register(ocgrpc.DefaultServerViews...)
+	// NOTE:
+	//  DefaultServerViewsを指定した場合、次の統計情報を収集する。
+	//  RPC毎の受信・送信バイト数, レイテンシ, 完了したRPC
+	if err != nil {
+		return nil, err
+	}
+
 	// サーバが各RPCのサブジェクトを識別して認可処理を開始できるようミドルウェアを設定
 	grpcOpts = append(grpcOpts,
+		// ストリーミングに関するミドルウェア設定
 		grpc.StreamInterceptor(
 			grpc_middleware.ChainStreamServer(
+				grpc_ctxtags.StreamServerInterceptor(),
+				grpc_zap.StreamServerInterceptor(logger, zapOpts...),
 				grpc_auth.StreamServerInterceptor(authenticate),
 			),
 		),
+		// ストリーミング以外に関するミドルウェア設定
 		grpc.UnaryInterceptor(
 			grpc_middleware.ChainUnaryServer(
+				grpc_ctxtags.UnaryServerInterceptor(),
+				grpc_zap.UnaryServerInterceptor(logger, zapOpts...),
 				grpc_auth.UnaryServerInterceptor(authenticate),
 			),
-		))
+		),
+		// サーバのリクエスト処理に関する統計情報ハンドラの設定
+		grpc.StatsHandler(&ocgrpc.ServerHandler{}),
+	)
 
 	gsrv := grpc.NewServer(grpcOpts...)
 	srv, err := newgrpcServer(config)
@@ -163,15 +200,15 @@ func (s *grpcServer) ConsumeStream(req *api.ConsumeRequest,
 // authenticate はクライアント証明書からサブジェクトを読み取り、RPCのコンテキストに書き込むミドルウェア。
 // ミドルウェア(別名インタセプタ)により、各RPC呼び出しの実行を途中で変更する。
 func authenticate(ctx context.Context) (context.Context, error) {
-	peer, ok := peer.FromContext(ctx)
+	p, ok := peer.FromContext(ctx)
 	if !ok {
 		return ctx, status.New(codes.Unknown, "couldn't find peer info").Err()
 	}
-	if peer.AuthInfo == nil {
+	if p.AuthInfo == nil {
 		return context.WithValue(ctx, subjectContextKey{}, ""), nil
 	}
 
-	tlsInfo := peer.AuthInfo.(credentials.TLSInfo)
+	tlsInfo := p.AuthInfo.(credentials.TLSInfo)
 	subject := tlsInfo.State.VerifiedChains[0][0].Subject.CommonName
 	ctx = context.WithValue(ctx, subjectContextKey{}, subject)
 	return ctx, nil
