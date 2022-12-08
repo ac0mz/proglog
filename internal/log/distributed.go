@@ -201,6 +201,75 @@ func (l *DistributedLog) Read(offset uint64) (*api.Record, error) {
 	return l.log.Read(offset)
 }
 
+// Join はRaftクラスタにサーバを追加する。（すべてのサーバは投票者として追加される）
+//
+//	NOTE:
+//	 Raftは AddNonVoter API で非投票者としてサーバ追加することもサポートしている。数多くのサーバに
+//	 状態を複製し、最終的に一貫性のある読み取り専用の状態を提供したい場合、非投票者サーバが有用となる。
+//	 なぜなら投票権を持つサーバを追加する度に、リーダーは過半数を得るために多くのサーバと通信する必要があり、
+//	 レプリケーションや選出に時間がかかる可能性が高くなるためである。
+func (l *DistributedLog) Join(id, addr string) error {
+	configFuture := l.raft.GetConfiguration()
+	if err := configFuture.Error(); err != nil {
+		return err
+	}
+	serverID := raft.ServerID(id)
+	serverAddr := raft.ServerAddress(addr)
+	for _, srv := range configFuture.Configuration().Servers {
+		if srv.ID == serverID || srv.Address == serverAddr {
+			if srv.ID == serverID && srv.Address == serverAddr {
+				// サーバはすでに参加済のためスキップ
+				return nil
+			}
+			// 既存サーバを除去
+			removeFuture := l.raft.RemoveServer(serverID, 0, 0)
+			if err := removeFuture.Error(); err != nil {
+				return err
+			}
+		}
+	}
+	addFuture := l.raft.AddVoter(serverID, serverAddr, 0, 0)
+	if err := addFuture.Error(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Leave はサーバをRaftクラスタから除去する。リーダーを除去した場合、新たな選出が行われる。
+func (l *DistributedLog) Leave(id string) error {
+	removeFuture := l.raft.RemoveServer(raft.ServerID(id), 0, 0)
+	return removeFuture.Error()
+}
+
+// WaitForLeader はクラスタがリーダーを選出するか、タイムアウトするまで待機する。
+func (l *DistributedLog) WaitForLeader(timeout time.Duration) error {
+	timeoutc := time.After(timeout)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-timeoutc:
+			return fmt.Errorf("timed out")
+		case <-ticker.C:
+			if l := l.raft.Leader(); l != "" {
+				return nil
+			}
+		}
+	}
+}
+
+// Close はRaftインスタンスをシャットダウンし、Raftのログストア及びローカルのログを閉じる。
+func (l *DistributedLog) Close() error {
+	f := l.raft.Shutdown()
+	if err := f.Error(); err != nil {
+		return err
+	}
+	if err := l.raftLog.Log.Close(); err != nil {
+		return nil
+	}
+	return l.log.Close()
+}
+
 var _ raft.FSM = (*fsm)(nil)
 
 // fsm は有限ステートマシン (finite-state machine) として操作する対象のログを管理する。
