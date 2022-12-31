@@ -3,6 +3,7 @@ package discovery
 import (
 	"net"
 
+	"github.com/hashicorp/raft"
 	"github.com/hashicorp/serf/serf"
 	"go.uber.org/zap"
 )
@@ -128,8 +129,18 @@ func (m *Membership) Leave() error {
 }
 
 // logError は与えられたエラーとメッセージをロギングする。
+//
+// NOTE:
+//
+//	リーダーではないノードでクラスタを変更しようとすると、Raftはエラーとなり ErrNotLeader を返却する。
+//	現在のサービスディスカバリのコードでは、すべてのハンドラエラーを重大なエラーとしてロギングしている。
+//	ただし、ノードがリーダーではない場合（ErrNotLeader）はデバッグレベルでロギングするようにする。
 func (m *Membership) logError(err error, msg string, member serf.Member) {
-	m.logger.Error(
+	log := m.logger.Error
+	if err == raft.ErrNotLeader {
+		log = m.logger.Debug
+	}
+	log(
 		msg,
 		zap.Error(err),
 		zap.String("name", member.Name),
