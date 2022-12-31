@@ -14,6 +14,7 @@ import (
 	"github.com/travisjeffery/go-dynaport"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 )
 
 // TestAgent はデータを複製(レプリケーション)するエージェントの動作を検証する。
@@ -69,6 +70,7 @@ func TestAgent(t *testing.T) {
 			ACLPolicyFile:   config.ACLPolicyFile,
 			ServerTLSConfig: serverTLSConfig,
 			PeerTLSConfig:   peerTLSConfig,
+			Bootstrap:       i == 0,
 		})
 		require.NoError(t, err)
 
@@ -110,14 +112,21 @@ func TestAgent(t *testing.T) {
 	)
 	require.Equal(t, consumeResponse.Record.Value, []byte("foo"))
 
-	// 現状、循環してデータ複製してしまうことの検証(1つしか書き込みしてないが、2つ目として同じログが読み出せる)
-	anotherResponse, err := followerClient.Consume(
+	// リーダーがフォロワーから複製していないこと（※）の検証
+	// ※リーダーに書き出したレコードをRaftが複製したことについて、
+	//  フォロワーからレコードを読み出すことで検査し、レプリケーションがそこで止まること
+	// ※元々、循環してデータ複製してしまっていた(1つしか書き込みしてないが、2つ目として同じログが読み出せる)
+	consumeResponse, err = leaderClient.Consume(
 		context.Background(),
-		&api.ConsumeRequest{Offset: produceResponse.Offset + 1},
+		&api.ConsumeRequest{
+			Offset: produceResponse.Offset + 1,
+		},
 	)
-	require.NotNil(t, consumeResponse)
-	require.NoError(t, err)
-	require.Equal(t, consumeResponse.Record.Value, anotherResponse.Record.Value)
+	require.Nil(t, consumeResponse)
+	require.Error(t, err)
+	got := status.Code(err)
+	want := status.Code(api.ErrOffsetOutOfRange{}.GRPCStatus().Err())
+	require.Equal(t, want, got)
 }
 
 // client はサービスのクライアントを生成するヘルパー関数。
