@@ -13,7 +13,8 @@ import (
 // TestSegment はセグメント処理の実行、および再構築時における既存の読み出しを正常・異常の観点で検証する。
 // インデックスファイルとストアファイルが最大サイズに達していることの確認も行う。
 func TestSegment(t *testing.T) {
-	dir, _ := os.MkdirTemp("", "segment-test")
+	dir, err := os.MkdirTemp("", "segment-test")
+	require.NoError(t, err)
 	defer os.RemoveAll(dir)
 
 	want := &api.Record{Value: []byte("hello world")}
