@@ -41,8 +41,9 @@ func (r *Resolver) Build(
 		fmt.Sprintf(`{ "loadBalancingConfig": [{ "%s": {} }] }`, Name),
 	)
 	var err error
-	// target.Endpoint が deprecated のため target.URL.Path を使用
-	r.resolverConn, err = grpc.Dial(target.URL.Path, dialOpts...)
+	// WARNING:
+	//  target.Endpoint が deprecated だが、推奨の target.URL.Path を使用すると agent_test.go のテスト実行が永遠に完了しなくなる
+	r.resolverConn, err = grpc.Dial(target.Endpoint, dialOpts...)
 	if err != nil {
 		return nil, err
 	}

@@ -2,7 +2,6 @@ package loadbalance
 
 import (
 	"net"
-	"net/url"
 	"testing"
 
 	api "github.com/ac0mz/proglog/api/v1"
@@ -54,9 +53,7 @@ func TestResolver(t *testing.T) {
 	r := &Resolver{}
 	_, err = r.Build(
 		resolver.Target{
-			URL: url.URL{
-				Path: l.Addr().String(),
-			},
+			Endpoint: l.Addr().String(),
 		},
 		conn,
 		opts,
