@@ -30,7 +30,6 @@ type Agent struct {
 	membership *discovery.Membership
 
 	shutdown     bool
-	shutdowns    chan struct{}
 	shutdownLock sync.Mutex
 }
 
@@ -60,8 +59,7 @@ func (c Config) RPCAddr() (string, error) {
 // New はAgentを作成し、コンポーネントを設定する一連のメソッドを実行する。
 func New(config Config) (*Agent, error) {
 	a := &Agent{
-		Config:    config,
-		shutdowns: make(chan struct{}),
+		Config: config,
 	}
 	setup := []func() error{
 		a.setupLogger,
@@ -138,8 +136,9 @@ func (a *Agent) setupLog() error {
 func (a *Agent) setupServer() error {
 	authorizer := auth.New(a.Config.ACLModelFile, a.Config.ACLPolicyFile)
 	serverConfig := &server.Config{
-		CommitLog:  a.log,
-		Authorizer: authorizer,
+		CommitLog:   a.log,
+		Authorizer:  authorizer,
+		GetServerer: a.log,
 	}
 	var opts []grpc.ServerOption
 	if a.Config.ServerTLSConfig != nil {
@@ -157,7 +156,7 @@ func (a *Agent) setupServer() error {
 			_ = a.Shutdown()
 		}
 	}()
-	return err
+	return nil
 }
 
 // setupMembership はDistributedLogをハンドラとして指定し、メンバーシップを作成する。
@@ -187,7 +186,6 @@ func (a *Agent) Shutdown() error {
 		return nil
 	}
 	a.shutdown = true
-	close(a.shutdowns)
 
 	shutdown := []func() error{
 		a.membership.Leave, // メンバーシップから離脱することで、ディスカバリのイベント受信を停止

@@ -43,7 +43,7 @@ $(CONFIG_PATH)/policy.csv:
 	cp test/policy.csv $(CONFIG_PATH)/policy.csv
 
 test: $(CONFIG_PATH)/model.conf $(CONFIG_PATH)/policy.csv  ## ACL設定ファイルを読み込み、テストを実行する
-	go test -v -race ./...
+	go test -v -race -cover ./...
 
 test-clean: ## テスト結果のキャッシュを初期化して、テストを実行する
 	go clean -testcache && make test

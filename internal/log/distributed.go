@@ -270,6 +270,29 @@ func (l *DistributedLog) Close() error {
 	return l.log.Close()
 }
 
+// GetServers はクラスタのサーバ情報一覧を返却する。
+// サーバ情報にはクライアントが接続すべきサーバアドレスと、リーダかどうかのフラグを含む。
+//
+//	NOTE:
+//	 Raftの設定はクラスタ内のサーバで構成され、その設定には各サーバのID,アドレス,投票権（※）が含まれている。
+//	 ※当該システムでは投票権は利用しない。
+//	 そのためRaftは、クラスタ内のリーダーのアドレスを教えることができる。
+func (l *DistributedLog) GetServers() ([]*api.Server, error) {
+	future := l.raft.GetConfiguration()
+	if err := future.Error(); err != nil {
+		return nil, err
+	}
+	var servers []*api.Server
+	for _, server := range future.Configuration().Servers {
+		servers = append(servers, &api.Server{
+			Id:       string(server.ID),
+			RpcAddr:  string(server.Address),
+			IsLeader: l.raft.Leader() == server.Address,
+		})
+	}
+	return servers, nil
+}
+
 var _ raft.FSM = (*fsm)(nil)
 
 // fsm は有限ステートマシン (finite-state machine) として操作する対象のログを管理する。
