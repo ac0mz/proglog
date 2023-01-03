@@ -10,9 +10,11 @@ import (
 
 	api "github.com/ac0mz/proglog/api/v1"
 	"github.com/ac0mz/proglog/internal/config"
+	"github.com/ac0mz/proglog/internal/loadbalance"
 	"github.com/stretchr/testify/require"
 	"github.com/travisjeffery/go-dynaport"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 )
@@ -94,6 +96,13 @@ func TestAgent(t *testing.T) {
 		&api.ProduceRequest{Record: &api.Record{Value: []byte("foo")}},
 	)
 	require.NoError(t, err)
+
+	// レプリケーションが完了するまで待機
+	// ・サーバ間で非同期に処理するため、複製されたログはすぐに他サーバで利用できない
+	// ・複数クライアントがすべてのサーバに接続、リーダに対してレコード書き込み、
+	// 　フォロワーからレコードを読み出すため、リーダーがフォロワーにレコードを複製することを待つ
+	time.Sleep(3 * time.Second)
+
 	consumeResponse, err := leaderClient.Consume(
 		context.Background(),
 		&api.ConsumeRequest{Offset: produceResponse.Offset},
@@ -102,9 +111,6 @@ func TestAgent(t *testing.T) {
 	require.Equal(t, consumeResponse.Record.Value, []byte("foo"))
 
 	// 別のノードがレコードを複製していることの検証
-	// レプリケーションが完了するまで待機(サーバ間で非同期に処理するため、複製されたログはすぐに他サーバで利用できない)
-	time.Sleep(3 * time.Second)
-
 	followerClient := client(t, agents[1], peerTLSConfig)
 	consumeResponse, err = followerClient.Consume(
 		context.Background(),
@@ -136,7 +142,12 @@ func client(t *testing.T, agent *Agent, tlsConfig *tls.Config) api.LogClient {
 	rpcAddr, err := agent.Config.RPCAddr()
 	require.NoError(t, err)
 
-	conn, err := grpc.Dial(rpcAddr, opts...)
+	conn, err := grpc.Dial(fmt.Sprintf(
+		"%s:///%s",
+		loadbalance.Name,
+		rpcAddr,
+	), opts...)
+	// conn, err := grpc.Dial(rpcAddr, opts...)
 	require.NoError(t, err)
 
 	client := api.NewLogClient(conn)
