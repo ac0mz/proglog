@@ -3,8 +3,7 @@ package log
 import (
 	"io"
 	"os"
-
-	"github.com/tysonmote/gommap"
+	"syscall"
 )
 
 // インデックスエントリを構成するバイト数を定義
@@ -16,9 +15,9 @@ const (
 
 // index はストアファイル内の各レコードへのインデックス情報を保持する。
 type index struct {
-	file *os.File    // 永続化されたファイル
-	mmap gommap.MMap // メモリマップされたファイル
-	size uint64      // インデックスのサイズ(次にインデックスに追加されるエントリをどこに書き込むかを表す)
+	file *os.File // 永続化されたファイル
+	mmap []byte   // メモリマップされたファイル
+	size uint64   // インデックスのサイズ(次にインデックスに追加されるエントリをどこに書き込むかを表す)
 }
 
 // newIndex は指定されたファイルからindexを作成する。
@@ -39,10 +38,12 @@ func newIndex(f *os.File, c Config) (*index, error) {
 		return nil, err
 	}
 	// ファイルをメモリにマッピング
-	if idx.mmap, err = gommap.Map(
-		idx.file.Fd(),
-		gommap.PROT_READ|gommap.PROT_WRITE,
-		gommap.MAP_SHARED,
+	if idx.mmap, err = syscall.Mmap(
+		int(idx.file.Fd()),
+		0,
+		int(c.Segment.MaxIndexBytes),
+		syscall.PROT_READ|syscall.PROT_WRITE,
+		syscall.MAP_SHARED,
 	); err != nil {
 		return nil, err
 	}
@@ -53,13 +54,9 @@ func newIndex(f *os.File, c Config) (*index, error) {
 // ※進行中のタスクを終了し、データ損失が発生しないよう後処理を行い、サービスが再起動できるように準備すること。
 func (i *index) Close() error {
 	// メモリにマップされたファイルデータを永続化されたファイルに同期
-	if err := i.mmap.Sync(gommap.MS_SYNC); err != nil {
+	if err := syscall.Munmap(i.mmap); err != nil {
 		return err
 	}
-	if err := i.mmap.UnsafeUnmap(); err != nil {
-		return err
-	}
-
 	// 永続化されたファイルをストレージに同期
 	if err := i.file.Sync(); err != nil {
 		return err
