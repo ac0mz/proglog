@@ -27,8 +27,8 @@ func Test_MultipleNodes(t *testing.T) {
 	for i := 0; i < nodeCount; i++ {
 		dataDir, err := os.MkdirTemp("", "distributed-log-test")
 		require.NoError(t, err)
-		defer func(dir string) {
-			_ = os.RemoveAll(dataDir)
+		func(dir string) {
+			defer os.RemoveAll(dir)
 		}(dataDir)
 
 		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", ports[i]))
