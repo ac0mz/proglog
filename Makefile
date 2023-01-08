@@ -51,3 +51,14 @@ test-clean: ## テスト結果のキャッシュを初期化して、テスト�
 help: ## makeコマンドのヘルプ
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS=":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+TAG ?= 0.0.1
+
+build-docker: ## Dockerビルド
+	docker build -t github.com/ac0mz/proglog:$(TAG) .
+
+kind-start: ## Dockerコンテナをノードとしてローカルk8sクラスタを作成＆実行
+	kind create cluster
+
+kind-load-img: ## ビルドしたDockerイメージをKindクラスタにロード
+	kind load docker-image github.com/ac0mz/proglog:$(TAG)
