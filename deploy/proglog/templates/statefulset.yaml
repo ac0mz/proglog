@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "proglog.fullname" }}
+  name: {{ include "proglog.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels: {{ include "proglog.labels" . | nindent 4 }}
 spec:
@@ -32,7 +32,7 @@ spec:
               rpc-port: {{ .Values.rpcPort }}
               bind-addr: "$HOSTNAME.proglog.{{.Release.Namespace}}.svc.cluster.local:{{.Values.serfPort}}"
               bootstrap: $([ $ID = 0 ] && echo true || echo false)
-              $([ $ID = 0 ] && echo 'start-join-addrs: "proglog-0.proglog.{{.Release.Namespace}}.svc.cluster.local:{{.Values.serfPort}}"')
+              $([ $ID != 0 ] && echo 'start-join-addrs: "proglog-0.proglog.{{.Release.Namespace}}.svc.cluster.local:{{.Values.serfPort}}"')
               EOD
           volumeMounts:
             # コンテナに datadir をマウントし、後でアプリケーションコンテナが読み込むものと同じ設定ファイルに書き込めるようにする
@@ -51,11 +51,19 @@ spec:
             - --config-file=/var/run/proglog/config.yaml
           readinessProbe:
             exec:
-              command: ["/bin/grpc_health_probe", "-addr=:{{ .Values.rpcPort }}"]
+              command:
+                - /bin/sh
+                - -c
+                - |-
+                  /bin/grpc_health_probe -addr=$HOSTNAME.proglog.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.rpcPort }}
             initialDelaySeconds: 10
           livenessProbe:
             exec:
-              command: ["/bin/grpc_health_probe", "-addr=:{{ .Values.rpcPort }}"]
+              command:
+                - /bin/sh
+                - -c
+                - |-
+                  /bin/grpc_health_probe -addr=$HOSTNAME.proglog.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.rpcPort }}
             initialDelaySeconds: 10
           volumeMounts:
             # 設定ファイルの読み込みとログの永続化のために、コンテナにボリュームをマウントする
