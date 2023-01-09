@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "proglog.fullname" }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{ include "proglog.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{ include "proglog.selectorLabels" . | nindent 6 }}
+  serviceName: {{ include "proglog.fullname" . }}
+  replicas: {{ .Values.replicas }}
+  template:
+    metadata:
+      name: {{ include "proglog.fullname" . }}
+      labels: {{ include "proglog.labels" . | nindent 8 }}
+    spec:
+      # NOTE: initContainers は containers フィールドに記載の StatefulSet のアプリケーションコンテナの前に完了するよう実行される
+      initContainers:
+        # *-config-init はサービスの設定ファイルを設定する
+        # bootstrap でRaftクラスタをブートストラップするために最初のサーバを設定
+        # 直後に、後続のサーバがクラスタに参加するよう設定
+        - name: {{ include "proglog.fullname" . }}-config-init
+          image: busybox
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |-
+              ID=$(echo $HOSTNAME | rev | cut -d- -f1 | rev)
+              cat > /var/run/proglog/config.yaml <<EOD
+              data-dir: /var/run/proglog/data
+              rpc-port: {{ .Values.rpcPort }}
+              bind-addr: "$HOSTNAME.proglog.{{.Release.Namespace}}.svc.cluster.local:{{.Values.serfPort}}"
+              bootstrap: $([ $ID = 0 ] && echo true || echo false)
+              $([ $ID = 0 ] && echo 'start-join-addrs: "proglog-0.proglog.{{.Release.Namespace}}.svc.cluster.local:{{.Values.serfPort}}"')
+              EOD
+          volumeMounts:
+            # コンテナに datadir をマウントし、後でアプリケーションコンテナが読み込むものと同じ設定ファイルに書き込めるようにする
+            - name: datadir
+              mountPath: /var/run/proglog
+      containers:
+        - name: {{ include "proglog.fullname" . }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          ports:
+            - containerPort: {{ .Values.rpcPort }}
+              name: rpc
+            - containerPort: {{ .Values.serfPort }}
+              name: serf
+          args:
+            # フラグにより設定ファイルがどこに格納されているかをサービスに伝える
+            - --config-file=/var/run/proglog/config.yaml
+          readinessProbe:
+            exec:
+              command: ["/bin/grpc_health_probe", "-addr=:{{ .Values.rpcPort }}"]
+            initialDelaySeconds: 10
+          livenessProbe:
+            exec:
+              command: ["/bin/grpc_health_probe", "-addr=:{{ .Values.rpcPort }}"]
+            initialDelaySeconds: 10
+          volumeMounts:
+            # 設定ファイルの読み込みとログの永続化のために、コンテナにボリュームをマウントする
+            - name: datadir
+              mountPath: /var/run/proglog
+  # volumeClaimTemplates の記述により、ポッドごとに PersistentVolumeClaim が作成される
+  volumeClaimTemplates:
+    - metadata:
+        name: datadir
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: {{ .Values.storage }}
