@@ -38,16 +38,37 @@ compile: ## protobufをコンパイルする
 
 $(CONFIG_PATH)/model.conf:
 	cp test/model.conf $(CONFIG_PATH)/model.conf
-
 $(CONFIG_PATH)/policy.csv:
 	cp test/policy.csv $(CONFIG_PATH)/policy.csv
 
 test: $(CONFIG_PATH)/model.conf $(CONFIG_PATH)/policy.csv  ## ACL設定ファイルを読み込み、テストを実行する
 	go test -v -race -cover ./...
-
 test-clean: ## テスト結果のキャッシュを初期化して、テストを実行する
 	go clean -testcache && make test
 
 help: ## makeコマンドのヘルプ
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS=":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+TAG ?= 0.0.1
+
+build-docker: ## Dockerビルド
+	docker build -t github.com/ac0mz/proglog:$(TAG) .
+
+kind-start: ## Dockerコンテナをノードとしてローカルk8sクラスタを作成＆実行
+	kind create cluster
+kind-load-img: ## ビルドしたDockerイメージをKindクラスタにロード
+	kind load docker-image github.com/ac0mz/proglog:$(TAG)
+
+helm-show-template: ## helmチャートの確認
+	helm template proglog deploy/proglog
+helm-install: ## helmチャートをクラスタにインストール
+	helm install proglog deploy/proglog
+helm-uninstall: ## helmチャートをクラスタからアンインストール
+	helm uninstall proglog deploy/proglog
+
+port-forward-local: ## ローカル環境上のk8s(ポッドやサービス)に対してホストのポートに転送
+	kubectl relay host/proglog-0.proglog.default.svc.cluster.local 8400
+
+pod-list: ## 現在のクラスタ内のポッド一覧を表示
+	kubectl get pods

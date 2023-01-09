@@ -27,8 +27,8 @@ func Test_MultipleNodes(t *testing.T) {
 	for i := 0; i < nodeCount; i++ {
 		dataDir, err := os.MkdirTemp("", "distributed-log-test")
 		require.NoError(t, err)
-		defer func(dir string) {
-			_ = os.RemoveAll(dataDir)
+		func(dir string) {
+			defer os.RemoveAll(dir)
 		}(dataDir)
 
 		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", ports[i]))
@@ -42,6 +42,7 @@ func Test_MultipleNodes(t *testing.T) {
 		config.Raft.ElectionTimeout = 100 * time.Millisecond
 		config.Raft.LeaderLeaseTimeout = 100 * time.Millisecond
 		config.Raft.CommitTimeout = 50 * time.Millisecond
+		config.Raft.BindAddr = ln.Addr().String()
 
 		if i == 0 {
 			// クラスタをブートストラップしてリーダになる
